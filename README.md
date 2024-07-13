@@ -14,4 +14,8 @@ This project fine-tunes a small GPT-2 model using the Hugging Face Transformers 
     pip install -r requirements.txt
 
 3. Add your training and testing data in the data directory.
-    
+
+4. Fine-Tuning
+    To fine-tune the model, run the following command:
+    ```sh
+    python scripts/fine_tune.py
