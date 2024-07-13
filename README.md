@@ -7,7 +7,7 @@ This project fine-tunes a small GPT-2 model using the Hugging Face Transformers 
 1. Clone the repository:
    ```sh
    git clone https://github.com/shelarsujit/gpt2_fine_tuning.git
-   cd my-gpt2-finetune-project
+   cd gpt2-fine_tuning
 
 2. Install the dependencies:
     ```sh
