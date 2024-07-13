@@ -5,7 +5,7 @@ def main():
     dataset = load_dataset('csv', data_files={'train': 'data/train.csv', 'test': 'data/test.csv'})
     print(dataset['train'][0])
 
-    model_name = 'gpt2'
+    model_name = 'distilgpt2'
     tokenizer = GPT2Tokenizer.from_pretrained(model_name)
     
     tokenizer.pad_token = tokenizer.eos_token

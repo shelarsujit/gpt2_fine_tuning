@@ -4,3 +4,7 @@ torch
 pandas
 transformers[torch]
 accelerate
+loralib
+peft
+trl
+flash-attention
