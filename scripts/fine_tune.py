@@ -2,21 +2,29 @@ from transformers import GPT2LMHeadModel, GPT2Tokenizer, Trainer, TrainingArgume
 from datasets import load_dataset
 
 def main():
-    # Load the dataset
     dataset = load_dataset('csv', data_files={'train': 'data/train.csv', 'test': 'data/test.csv'})
+    print(dataset['train'][0])
 
-    # Load the pre-trained GPT-2 tokenizer and model
     model_name = 'gpt2'
     tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+    
+    tokenizer.pad_token = tokenizer.eos_token
+
+    assert tokenizer.pad_token is not None
+
     model = GPT2LMHeadModel.from_pretrained(model_name)
 
-    # Tokenize the dataset
     def tokenize_function(examples):
         return tokenizer(examples['text'], truncation=True, padding='max_length', max_length=512)
 
-    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    tokenized_dataset = dataset.map(tokenize_function, batched=True, remove_columns=['text'])
 
-    # Set up training arguments
+    def adjust_labels(examples):
+        examples['labels'] = examples['input_ids'].copy()
+        return examples
+
+    tokenized_dataset = tokenized_dataset.map(adjust_labels, batched=True)
+
     training_args = TrainingArguments(
         output_dir='./results',
         num_train_epochs=3,
@@ -28,7 +36,6 @@ def main():
         logging_steps=10,
     )
 
-    # Initialize the Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -36,7 +43,6 @@ def main():
         eval_dataset=tokenized_dataset['test']
     )
 
-    # Fine-tune the model
     trainer.train()
 
 if __name__ == "__main__":

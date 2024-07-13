@@ -1,15 +1,28 @@
-from datasets import load_dataset
 import pandas as pd
 
-# Load the wikitext-2 dataset
-dataset = load_dataset('wikitext', 'wikitext-2-raw-v1')
+# Load the raw CSV data
+train_df = pd.read_csv('data/train.csv', header=None, names=['text'])
+test_df = pd.read_csv('data/test.csv', header=None, names=['text'])
 
-# Convert the dataset to pandas DataFrame
-train_df = pd.DataFrame(dataset['train'])
-test_df = pd.DataFrame(dataset['test'])
+def clean_and_combine(df):
+    combined_texts = []
+    current_text = ""
+    for index, row in df.iterrows():
+        text = row['text']
+        if pd.notna(text):
+            current_text += " " + text.strip()
+        else:
+            if current_text:
+                combined_texts.append(current_text.strip())
+                current_text = ""
+    if current_text:
+        combined_texts.append(current_text.strip())
+    return pd.DataFrame(combined_texts, columns=['text'])
 
-# Save the DataFrames to CSV files
-train_df.to_csv('data/train.csv', index=False)
-test_df.to_csv('data/test.csv', index=False)
+clean_train_df = clean_and_combine(train_df)
+clean_test_df = clean_and_combine(test_df)
 
-print("Train and test CSV files have been created.")
+clean_train_df.to_csv('data/train.csv', index=False)
+clean_test_df.to_csv('data/test.csv', index=False)
+
+print("Cleaned train and test CSV files have been created.")

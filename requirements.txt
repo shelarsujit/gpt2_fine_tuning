@@ -1,3 +1,6 @@
 transformers
 datasets
 torch
+pandas
+transformers[torch]
+accelerate
