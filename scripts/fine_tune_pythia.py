@@ -1,18 +1,23 @@
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
-from datasets import load_dataset, Dataset
+from datasets import load_dataset
 from utils import tokenize_function
 
 def main(args):
+    # Load tokenizer and model
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model = AutoModelForCausalLM.from_pretrained(args.model_name)
 
-    dataset = load_dataset("the_pile", split="train")
+    # Load the C4 dataset
+    dataset = load_dataset("allenai/c4", "en", split="train")
 
-    dataset = dataset.shuffle(seed=42).select(range(10000))
+    # Optionally, use a smaller subset of the dataset for quicker training
+    dataset = dataset.shuffle(seed=42).select(range(1000))
 
+    # Tokenize the dataset
     tokenized_datasets = dataset.map(lambda x: tokenize_function(x, tokenizer), batched=True)
 
+    # Set up training arguments
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         overwrite_output_dir=True,
@@ -22,14 +27,17 @@ def main(args):
         save_total_limit=2,
     )
 
+    # Initialize Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=tokenized_datasets,
     )
 
+    # Train the model
     trainer.train()
 
+    # Save the model and tokenizer
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
