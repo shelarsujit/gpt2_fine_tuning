@@ -1,62 +1,204 @@
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
-from datasets import load_dataset
-from peft import LoraConfig, get_peft_model
+import sys
+import logging
 import os
 
-# Set Hugging Face API token
-os.environ["HUGGINGFACE_HUB_TOKEN"] = "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"
+import datasets
+from datasets import load_dataset
+from peft import LoraConfig
+import torch
+import transformers
+from trl import SFTTrainer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments, BitsAndBytesConfig
 
-# Load the tokenizer and model
-model_name = "microsoft/Phi-3-mini-4k-instruct"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name)
+"""
+A simple example on using SFTTrainer and Accelerate to finetune Phi-3 models. 
+This example utilizes DeepSpeed ZeRO3 offload to reduce memory usage. 
+The script can be run on V100 or later generation GPUs. Here are some suggestions on further reducing memory consumption:
+    - reduce batch size
+    - decrease lora dimension
+    - restrict lora target modules
+Please follow these steps to run the script:
+1. Install dependencies: 
+    conda install -c conda-forge accelerate
+    pip install -i https://pypi.org/simple/ bitsandbytes
+    pip install peft transformers trl datasets
+    pip install deepspeed
+2. Setup accelerate and deepspeed config based on the machine used:
+    accelerate config
+Here is a sample config for deepspeed zero3:
+    compute_environment: LOCAL_MACHINE
+    debug: false
+    deepspeed_config:
+      gradient_accumulation_steps: 1
+      offload_optimizer_device: none
+      offload_param_device: none
+      zero3_init_flag: true
+      zero3_save_16bit_model: true
+      zero_stage: 3
+    distributed_type: DEEPSPEED
+    downcast_bf16: 'no'
+    enable_cpu_affinity: false
+    machine_rank: 0
+    main_training_function: main
+    mixed_precision: bf16
+    num_machines: 1
+    num_processes: 4
+    rdzv_backend: static
+    same_network: true
+    tpu_env: []
+    tpu_use_cluster: false
+    tpu_use_sudo: false
+    use_cpu: false
+3. Check accelerate config:
+    accelerate env
+4. Run the code:
+    accelerate launch sample_finetune.py
+"""
 
-# Load and preprocess dataset
-dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
+logger = logging.getLogger(__name__)
 
-def tokenize_function(examples):
-    return tokenizer(examples["text"], return_tensors="pt", truncation=True, padding="max_length", max_length=512)
+###################
+# Hyper-parameters
+###################
+training_config = {
+    "bf16": True,
+    "do_eval": False,
+    "learning_rate": 5.0e-06,
+    "log_level": "info",
+    "logging_steps": 20,
+    "logging_strategy": "steps",
+    "lr_scheduler_type": "cosine",
+    "num_train_epochs": 1,
+    "max_steps": -1,
+    "output_dir": "./checkpoint_dir",
+    "overwrite_output_dir": True,
+    "per_device_eval_batch_size": 4,
+    "per_device_train_batch_size": 4,
+    "remove_unused_columns": True,
+    "save_steps": 100,
+    "save_total_limit": 1,
+    "seed": 0,
+    "gradient_checkpointing": True,
+    "gradient_checkpointing_kwargs": {"use_reentrant": False},
+    "gradient_accumulation_steps": 1,
+    "warmup_ratio": 0.2,
+}
 
-tokenized_datasets = dataset.map(tokenize_function, batched=True)
-train_dataset = tokenized_datasets["train"]
-eval_dataset = tokenized_datasets["validation"]
+peft_config = {
+    "r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05,
+    "bias": "none",
+    "task_type": "CAUSAL_LM",
+    "target_modules": ["dense", "dense_h_to_4h", "dense_4h_to_h"],  # Update based on the model structure
+    "modules_to_save": None,
+}
 
-# LoRA configuration
-lora_config = LoraConfig(
-    r=8,
-    lora_alpha=32,
-    target_modules=["q_proj", "v_proj"],
-    lora_dropout=0.1,
-    bias="none",
-    task_type="CAUSAL_LM"
+train_conf = TrainingArguments(**training_config)
+peft_conf = LoraConfig(**peft_config)
+
+###############
+# Setup logging
+###############
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+log_level = train_conf.get_process_log_level()
+logger.setLevel(log_level)
+datasets.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.set_verbosity(log_level)
+transformers.utils.logging.enable_default_handler()
+transformers.utils.logging.enable_explicit_format()
+
+# Log on each process a small summary
+logger.warning(
+    f"Process rank: {train_conf.local_rank}, device: {train_conf.device}, n_gpu: {train_conf.n_gpu}"
+    + f" distributed training: {bool(train_conf.local_rank != -1)}, 16-bits training: {train_conf.fp16}"
+)
+logger.info(f"Training/evaluation parameters {train_conf}")
+logger.info(f"PEFT parameters {peft_conf}")
+
+################
+# Model Loading
+################
+checkpoint_path = "microsoft/Phi-3-mini-4k-instruct"
+# checkpoint_path = "microsoft/Phi-3-mini-128k-instruct"
+model_kwargs = dict(
+    use_cache=False,
+    trust_remote_code=True,
+    attn_implementation="flash_attention_2",  # loading the model with flash-attenstion support
+    torch_dtype=torch.bfloat16,
+    device_map=None
+)
+model = AutoModelForCausalLM.from_pretrained(checkpoint_path, **model_kwargs)
+tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
+tokenizer.model_max_length = 2048
+tokenizer.pad_token = tokenizer.unk_token  # use unk rather than eos token to prevent endless generation
+tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids(tokenizer.pad_token)
+tokenizer.padding_side = 'right'
+
+##################
+# Data Processing
+##################
+def apply_chat_template(example, tokenizer):
+    messages = example["messages"]
+    example["text"] = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=False)
+    return example
+
+raw_dataset = load_dataset("HuggingFaceH4/ultrachat_200k")
+train_dataset = raw_dataset["train_sft"]
+test_dataset = raw_dataset["test_sft"]
+column_names = list(train_dataset.features)
+
+processed_train_dataset = train_dataset.map(
+    apply_chat_template,
+    fn_kwargs={"tokenizer": tokenizer},
+    num_proc=10,
+    remove_columns=column_names,
+    desc="Applying chat template to train_sft",
 )
 
-model = get_peft_model(model, lora_config)
-
-# Training arguments
-training_args = TrainingArguments(
-    output_dir="./results",
-    evaluation_strategy="epoch",
-    learning_rate=2e-5,
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    num_train_epochs=3,
-    weight_decay=0.01,
-    logging_dir="./logs",
+processed_test_dataset = test_dataset.map(
+    apply_chat_template,
+    fn_kwargs={"tokenizer": tokenizer},
+    num_proc=10,
+    remove_columns=column_names,
+    desc="Applying chat template to test_sft",
 )
 
-# Trainer
-trainer = Trainer(
+###########
+# Training
+###########
+trainer = SFTTrainer(
     model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
+    args=train_conf,
+    peft_config=peft_conf,
+    train_dataset=processed_train_dataset,
+    eval_dataset=processed_test_dataset,
+    max_seq_length=2048,
+    dataset_text_field="text",
+    tokenizer=tokenizer,
+    packing=True
 )
+train_result = trainer.train()
+metrics = train_result.metrics
+trainer.log_metrics("train", metrics)
+trainer.save_metrics("train", metrics)
+trainer.save_state()
 
-# Train the model
-trainer.train()
+#############
+# Evaluation
+#############
+tokenizer.padding_side = 'left'
+metrics = trainer.evaluate()
+metrics["eval_samples"] = len(processed_test_dataset)
+trainer.log_metrics("eval", metrics)
+trainer.save_metrics("eval", metrics)
 
-# Save the model
-model.save_pretrained("./phi3-mini-finetuned")
-tokenizer.save_pretrained("./phi3-mini-finetuned")
+############
+# Save model
+############
+trainer.save_model(train_conf.output_dir)
