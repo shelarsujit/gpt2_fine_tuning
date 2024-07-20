@@ -35,6 +35,11 @@ This project fine-tunes a small GPT-2 model using the Hugging Face Transformers 
     python scripts/data_processing.py
 
 4. Fine-Tuning
-    To fine-tune the model, run the following command:
+    To fine-tune the specific model, run the following command:
     ```sh
-    python scripts/fine_tune.py
+    python scripts/fine_tune_distilgpt2.py
+    python scripts/fine_tune_gpt2.py
+    python scripts/fine_tune_phi3.py
+    python scripts/fine_tune_pythia.py
+    python scripts/finetune_phi3_mini.py
+
