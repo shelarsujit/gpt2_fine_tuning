@@ -8,3 +8,11 @@ loralib
 peft
 trl
 flash-attention
+bitsandbytes
+flash_attn
+huggingface_hub
+python-dotenv
+wandb
+absl-py
+nltk
+rouge_score
